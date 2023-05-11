@@ -1,0 +1,448 @@
+private ErrorValidacio validacioAlbara51(String nifEmpresa, Albara albara, UniSession uSession) {
+        System.out.println("----------------------------------------------------------------------------------------------------------------------------------------------");
+        System.out.println("--------------------------- INICI COMPROVACIO ALBARA 51 - " + albara.getCompteCarrec() + " / " + getDateNow() + " ----------------------------------------------------");
+        System.out.println("----------------------------------------------------------------------------------------------------------------------------------------------");
+        ErrorValidacio validacioAlbara = new ErrorValidacio();
+
+        //VALIDAR LOG CREACIO ALBARA
+        if ("".equals(albara.getLogCreacioAlbara())) {
+            System.err.println("Error: El Log creació albarà no pot ser buit!");
+            validacioAlbara.setCorrect(false);
+            validacioAlbara.setMsg("Error: El Log creació albarà no pot ser buit!");
+            return validacioAlbara;
+        }
+
+        // VALIDAR NEGOCI ORIGEN
+        if (!"".equals(albara.getNegociOrigen())) {
+            //TODO: CONSULTAR EL NEGOCIO DE ORIGEN EN EL FICHERO 'NEGOCIS'
+            Boolean respNegOrg = albaraDAO.comprobarNegociOrigen(albara.getNegociOrigen(), uSession);
+            if (!respNegOrg) {
+                System.err.println("Error: Negoci Origen no vàlid!");
+                validacioAlbara.setCorrect(false);
+                validacioAlbara.setMsg("Error: Negoci Origen no vàlid!");
+                return validacioAlbara;
+            }
+        } else {
+            System.err.println("Error: Negoci Origen no pot ser buit!");
+            validacioAlbara.setCorrect(false);
+            validacioAlbara.setMsg("Error: Negoci Origen no pot ser buit!");
+            return validacioAlbara;
+        }
+
+        // OBTENER VALOR IVA GENERICO DEL FICHERO MCONTADO.QIVA                                
+        ErrorValidacio obtenerIvaGenerico = albaraDAO.obtenerIvaGenerico(uSession);
+        if (obtenerIvaGenerico.isCorrect()) {
+            this.ivaGenerico = Float.valueOf(obtenerIvaGenerico.getValue());
+        } else {
+            System.err.println("Error en Obtenir l'IVA genèric del Fitxer MCONTADO");
+            validacioAlbara.setCorrect(false);
+            validacioAlbara.setMsg(obtenerIvaGenerico.getMsg());
+            return validacioAlbara;
+        }
+
+        if (Objects.nonNull(albara.getQuantitat())) {
+            //COMPROBAR QUE CANTIDAD SEA UN VALOR NUMERICO 
+            if (!String.valueOf(albara.getQuantitat()).matches("-?\\d+(\\.\\d+)?")) {
+                System.err.println("Error:  La quantitat ha de ser un valor numèric!");
+                validacioAlbara.setCorrect(false);
+                validacioAlbara.setMsg("Error:  La quantitat ha de ser un valor numèric!");
+                return validacioAlbara;
+            }
+        } else {
+            System.err.println("Error: quantitat no pot ser buit!");
+            validacioAlbara.setCorrect(false);
+            validacioAlbara.setMsg("Error: quantitat no pot ser buit!");
+            return validacioAlbara;
+        }
+
+        // COMPROBAR IVA
+        Float tempIva;
+        if ("".equals(albara.getIva()) || "0".equals(albara.getIva())) {
+            tempIva = this.ivaGenerico;
+            albara.setIva(String.valueOf(this.ivaGenerico)); //SET Attribute albara(21)
+        } else {
+            String ivaValidoStr = albaraDAO.getIvaValido(uSession);
+            String[] dadesIva = ivaValidoStr.split("ý");    
+            
+            Boolean foundIva = false;
+            for (String s : dadesIva) {
+                if (s.equals(Integer.valueOf(albara.getIva()).toString())) {
+                    foundIva=true;
+                    break;
+                }
+            }
+            
+            if (foundIva) {
+                tempIva = Float.valueOf(albara.getIva());
+            } else {
+                System.err.println("Error: L'Iva no es correcte!");
+                validacioAlbara.setCorrect(false);
+                validacioAlbara.setMsg("Error: L'Iva no es correcte!");
+                return validacioAlbara;
+            }
+        }
+
+        //COMPROBAR QUE EL IMPORTE TOTAL NO SEA 0.00
+        DecimalFormat df = new DecimalFormat("0.00");
+        System.out.println("IMPORT UNITARI = " + albara.getImportUnitari() + " * QUANTITAT = " + albara.getQuantitat() + " * IVA = " + tempIva);
+        String importTotalStr = df.format((albara.getImportUnitari() * albara.getQuantitat()) * (1 + (tempIva / 100)));
+        Float importTotal = Float.valueOf(importTotalStr.replace(",", "."));
+
+        System.out.println("IMPORT TOTAL CALCULAT = " + importTotal);
+        if (importTotal == 0.00) {
+            System.err.println("Error: L'import total " + importTotal + " ha de ser més gran a (0.01)");
+            validacioAlbara.setCorrect(false);
+            validacioAlbara.setMsg("Error: L'import total " + importTotal + " ha de ser més gran a (0.01)");
+            return validacioAlbara;
+        }
+
+        if (albara.getDepatamentSeccioAbonament() == 1 || albara.getDepatamentSeccioAbonament() == 5 || albara.getDepatamentSeccioAbonament() == 15 || albara.getDepatamentSeccioAbonament() == 21) {
+            // 1.- VALIDAR QUE EL DEPARTAMENTO DE ABONO EXISTA
+            Departament tempDepartament = departamentEJB.getDepartamentsByID(nifEmpresa, albara.getDepatamentSeccioAbonament());
+            if (Objects.nonNull(tempDepartament)) {
+                Seccio tempSeccio = seccioEJB.getSeccionsByID(nifEmpresa, albara.getSeccioAbonament().toString(), albara.getDepatamentSeccioAbonament().toString());
+                // 2.- VALIDAR QUE LA SECCION DE ABONO SEA DEL DEPARTAMENTO DE ABONO
+                if (Objects.nonNull(tempSeccio)) {
+                    // 3.- COMPROBAR QUE LA SECCION DE ABONO  NO SE HA DADO DE BAJA
+                    if (tempSeccio.getDataBaixa().isEmpty()) {
+                        // 4.- COMPROBAR QUE TIPO DE CUENTA DE CARGO ES (NIF, DNI, NIE, CARREC INTERN, PRESSUPOST)
+                        String typeCC = this.CheckPatternCompteCarrecc(albara.getCompteCarrec());
+                        switch (typeCC) {
+                            case OPTPREESUPOST:
+                                System.out.println("Camp (9) JSON és un pressupost");
+                                //CONTROL PRESSUPOST
+                                ErrorValidacio respCompPressupost = albaraDAO.comprobarPressupost(albara.getCompteCarrec(), uSession);
+                                if (respCompPressupost.isCorrect()) {
+                                    char desc = albara.getDescripcio().charAt(0);
+                                    if (">".equals(String.valueOf(desc))) {
+                                        albara.setDescripcio(">COBRAMENT A SOCI");
+                                    }
+                                    albara.setBanc("  ");
+                                    albara.setVenciment("");
+                                    validacioAlbara = insertAlbara(albara, "51", uSession);
+                                    return validacioAlbara;
+                                } else {
+                                    validacioAlbara.setCorrect(false);
+                                    validacioAlbara.setMsg(respCompPressupost.getMsg());
+                                    return validacioAlbara;
+                                }
+                            case OPTVENDESDETALL:
+                                System.out.println("Camp (9) JSON és un Vendes Detalls");
+                                albara.setBanc("01");
+                                if (!"".equals(albara.getQuantitat()) || !"".equals(albara.getImportUnitari())) {
+                                    if (((albara.getImportUnitari() * albara.getQuantitat()) * (1 + (this.ivaGenerico / 100))) <= 3000.0) {
+                                        validacioAlbara = insertAlbara(albara, "51", uSession);
+                                        return validacioAlbara;
+                                    } else {
+                                        System.err.println("Error:  El import Total " + importTotal + " no pot ser més gran a 3000€ en factures de venda al por menor!");
+                                        validacioAlbara.setCorrect(false);
+                                        validacioAlbara.setMsg("Error: El import Total " + importTotal + " no pot ser més gran a 3000€  en factures de venda al por menor!");
+                                        return validacioAlbara;
+                                    }
+                                } else {
+                                    System.err.println("Error:  El import unitari o quantitat no pot ser buit!");
+                                    validacioAlbara.setCorrect(false);
+                                    validacioAlbara.setMsg("Error:  El import unitari o quantitat no pot ser buit!");
+                                    return validacioAlbara;
+                                }
+                            case OPTCARRECINTERN:
+                                System.out.println("Camp (9) JSON és un Càrrec Intern");
+                                //CONTROL CARREC INTERN                                      
+                                //EXTRAER DEL PLACON LA LETRA QUE ACOMPAÑA EL CAMPO<9> ("0000X")
+                                ErrorValidacio respPlacon = albaraDAO.getSeccioCarrecPlacon(albara.getCompteCarrec().substring(albara.getCompteCarrec().length() - 1), uSession);
+                                if (respPlacon.isCorrect()) {
+                                    UniDynArray dynArrayPlacon = new UniDynArray(respPlacon.getValue());
+                                    //COMPROBAR QUE LA CUENTA EXISTA EN LA EMPRESA
+                                    Compte tempCompte = compteEJB.getComptesByID(nifEmpresa, Integer.valueOf(dynArrayPlacon.extract(2).toString()));
+                                    if (Objects.nonNull(tempCompte)) {
+                                        //TODO: REVISAR CUANDO VENGA RAMON
+                                        Seccio tempSeccioCI = seccioEJB.getSeccionsByID(nifEmpresa, albara.getCompteCarrec().substring(0, 4), albara.getDepartamentSeccioCompteCarrecIntern());
+                                        if (Objects.nonNull(tempSeccioCI)) {
+                                            if (tempSeccio.getDataBaixa().isEmpty()) {
+                                                albara.setBanc("  ");
+                                                validacioAlbara = insertAlbara(albara, "51", uSession);
+                                                return validacioAlbara;
+                                            } else {
+                                                System.err.println("Error: Secció d'Abonament " + albara.getCompteCarrec().substring(0, 4) + " donada de Baixa!");
+                                                validacioAlbara.setCorrect(false);
+                                                validacioAlbara.setMsg("Error: Secció d'Abonament " + albara.getCompteCarrec().substring(0, 4) + " donada de Baixa!");
+                                                return validacioAlbara;
+                                            }
+                                        } else {
+                                            System.err.println("Error:  La secció " + albara.getCompteCarrec().substring(0, 4) + " indicat a la compteCarrec no és vàlid o no existeix!");
+                                            validacioAlbara.setCorrect(false);
+                                            validacioAlbara.setMsg("Error:  La secció " + albara.getCompteCarrec().substring(0, 4) + " indicat a la compteCarrec no és vàlid o no existeix!");
+                                            return validacioAlbara;
+                                        }
+                                    } else {
+                                        System.err.println("Error:  El compte " + dynArrayPlacon.extract(2).toString() + " (" + albara.getCompteCarrec().substring(albara.getCompteCarrec().length() - 1) + ") indicat a la compteCarrec no és vàlid o no existeix!");
+                                        validacioAlbara.setCorrect(false);
+                                        validacioAlbara.setMsg("Error:  El compte " + dynArrayPlacon.extract(2).toString() + " (" + albara.getCompteCarrec().substring(albara.getCompteCarrec().length() - 1) + ") indicat a la compteCarrec no és vàlid o no existeix!");
+                                        return validacioAlbara;
+                                    }
+                                } else {
+                                    System.err.println("Error:  El compte indicat " + albara.getCompteCarrec().substring(albara.getCompteCarrec().length() - 1) + " a la compteCarrec no és vàlid o no existeix!");
+                                    validacioAlbara.setCorrect(false);
+                                    validacioAlbara.setMsg("Error:  Compte no trobada!! ");
+                                    return validacioAlbara;
+                                }
+                            case OPTSRSOCI:
+                                System.out.println("Camp (9) JSON és un NIF");
+
+                                char desc = albara.getDescripcio().charAt(0);
+                                if ("#".equals(String.valueOf(desc))) {
+                                    albara.setDescripcio("#INTS.APLAZAMIENTO");
+                                } else if ("@".equals(String.valueOf(desc))) {
+                                    albara.setDescripcio("#INTS.DEMORA");
+                                }
+
+                                String subStrDesc = albara.getDescripcio().substring(0, 6);
+                                if ("#INTS.".equals(subStrDesc)) {
+                                    // COMPROBAR QUE QUANTITAT <13> NO SEA UN VALOR NEGATIVO
+                                    if (importTotal < 0) {
+                                        System.err.println("Error:  L'import total " + importTotal + " no pot ser negatiu!");
+                                        validacioAlbara.setCorrect(false);
+                                        validacioAlbara.setMsg("Error:  L'import total " + importTotal + " no pot ser negatiu!");
+                                        return validacioAlbara;
+                                    }
+                                }
+
+                                //SET BANC
+                                albara.setBanc("01");
+                                // VALIDAR QUE TIPO DE CLIENTE ES Y SI ES VALIDO
+                                ErrorValidacio validacioCliente = comprobarClient(albara.getCompteCarrec(), uSession);
+                                if (validacioCliente.isCorrect()) {
+                                    ErrorValidacio validacioEmpresaGrupo = comprobarEmpresaGrup(albara.getCompteCarrec());
+                                    if (validacioEmpresaGrupo.isCorrect()) {
+                                        // ES UNA EMPRESA DEL GRUPO
+                                        // COMPROBAR SI EL CompteSeccioIntern<26> COMIENZA POR LOS NUMEROS PERMITIDOS 
+                                        System.out.println(albara.getCompteSeccioIntern());
+                                        if (albara.getCompteSeccioIntern().length() == 8) {
+                                            if ("2".equals(String.valueOf(albara.getCompteSeccioIntern().charAt(0))) || "6".equals(String.valueOf(albara.getCompteSeccioIntern().charAt(0))) || "7".equals(String.valueOf(albara.getCompteSeccioIntern().charAt(0)))) {
+                                                ErrorValidacio validacioCompteSeccioInterna = comprobarCompteEmpresa(albara.getCompteCarrec(), albara.getCompteSeccioIntern().substring(0, 4));
+                                                if (validacioCompteSeccioInterna.isCorrect()) {
+                                                    //COMPROBAR QUE LA SECCION EXISTE
+                                                    Seccio tempSeccioIntern = seccioEJB.getSeccionsByID(albara.getCompteCarrec(), albara.getCompteSeccioIntern().substring(4, 8), albara.getDepartamentSeccioCompteCarrecEmpresaGrup());
+                                                    //aqui
+                                                    if (Objects.nonNull(tempSeccioIntern)) {
+                                                        if (tempSeccioIntern.getDataBaixa().isEmpty()) {
+                                                            if ("2".equals(String.valueOf(albara.getCompteSeccioIntern().charAt(0)))) {
+                                                                //ES UNA INVERSIÓN
+                                                                if (!"".equals(albara.getReferenciaInversio()) || !"0".equals(albara.getReferenciaInversio())) {
+                                                                    if (!"".equals(albara.getReferenciaTipusAmortitzacio())) {
+                                                                        // VERIFICAR QUE LOS PRIMEROS 4 DIGITOS DE  CompteSeccioIntern <26> COINCIDAN CON TIPUS_AMORTITZACIO<2>
+                                                                        Boolean CarrecTipusAmortitzacio = albaraDAO.comprobarCompteCarrecTipusAmortitzacio(albara.getReferenciaTipusAmortitzacio(), albara.getCompteSeccioIntern().substring(0, 4), uSession);
+                                                                        System.out.println("CarrecTipusAmortitzacio > " + CarrecTipusAmortitzacio);
+                                                                        if (CarrecTipusAmortitzacio) {
+                                                                            ArraySubrutina dadesSrInversionsA = srINVERSIONS("IDINVERSIO", albara.getReferenciaInversio(), albara.getCompteCarrec(), null, null, null, null, null, null, null, uSession);
+                                                                            if (dadesSrInversionsA.getIsCorrect()) {
+                                                                                UniDynArray dynArray = new UniDynArray(dadesSrInversionsA.getDades());
+                                                                                String[] dades = dynArray.extract(20).toString().split("ý");
+                                                                                albara.setDescripcio(dades[3]);
+                                                                            } else {
+                                                                                System.err.println("Error: Comprovar la referencia de la inversió " + albara.getReferenciaInversio() + ".");
+                                                                                validacioAlbara.setCorrect(false);
+                                                                                validacioAlbara.setMsg("Error: Comprovar la referencia de la inversió " + albara.getReferenciaInversio() + ".");
+                                                                                return validacioAlbara;
+                                                                            }
+                                                                            if ("A25445131".equals(albara.getCompteCarrec()) && !"".equals(albara.getPressupostInversio())) {
+                                                                                ErrorValidacio respCompPressupostB = albaraDAO.comprobarPressupost(albara.getPressupostInversio(), uSession);
+                                                                                if (respCompPressupostB.isCorrect()) {
+                                                                                    //---------------------------------------------------------------------------------------------------------
+                                                                                    // COMPROBACIÓN HECHA - PASÓ BIEN
+                                                                                    //---------------------------------------------------------------------------------------------------------
+                                                                                    UniDynArray dynArray = new UniDynArray(respCompPressupostB.getValue());
+                                                                                    if (!dynArray.extract(37).toString().equals("")) {
+                                                                                        if (dynArray.extract(37).toString().equals(albara.getReferenciaInversio())) {
+                                                                                            // SI ES EL NIF DE CORPORACION
+                                                                                            ArraySubrutina dadesSrInversionsB = srINVERSIONS("CARRECCCPRESSUPOST", null, null, albara.getPressupostInversio(), albara.getDescripcio(), albaraDAO.getFiSemanaComptable(uSession), null, albara.getImportUnitari(), albara.getQuantitat(), null, uSession);
+                                                                                            System.out.println("srINVERSIONS CARRECCCPRESSUPOST > " + dadesSrInversionsB);
+                                                                                        } else {
+                                                                                            System.err.println("Error: La referència de la inversió (" + albara.getReferenciaInversio() + ") no coincideix amb la definida al pressupost!!. ");
+                                                                                            validacioAlbara.setCorrect(false);
+                                                                                            validacioAlbara.setMsg("Error: La referència de la inversió (" + albara.getReferenciaInversio() + ") no coincideix amb la definida al pressupost!!. ");
+                                                                                            return validacioAlbara;
+                                                                                        }
+                                                                                    } else {
+                                                                                        System.err.println("Error: El pressupost " + dynArray.extract(37).toString() + " no té una inversió associada!!");
+                                                                                        validacioAlbara.setCorrect(false);
+                                                                                        validacioAlbara.setMsg("Error: El pressupost " + dynArray.extract(37).toString() + " no té una inversió associada!!");
+                                                                                        return validacioAlbara;
+                                                                                    }
+                                                                                } else {
+                                                                                    System.err.println(respCompPressupostB.getMsg());
+                                                                                    validacioAlbara.setCorrect(false);
+                                                                                    validacioAlbara.setMsg(respCompPressupostB.getMsg());
+                                                                                    return validacioAlbara;
+                                                                                }
+                                                                            }
+                                                                            validacioAlbara = insertAlbara(albara, "51", uSession);
+                                                                            return validacioAlbara;
+                                                                        } else {
+                                                                            System.err.println("Error: La Secció del CompteSeccioIntern " + albara.getCompteSeccioIntern().substring(0, 4) + " no coincideix amb el definit al Tipus d'Amortització " + albara.getReferenciaTipusAmortitzacio());
+                                                                            validacioAlbara.setCorrect(false);
+                                                                            validacioAlbara.setMsg("Error: La Secció del CompteSeccioIntern " + albara.getCompteSeccioIntern().substring(0, 4) + " no coincideix amb el definit al Tipus d'Amortització " + albara.getReferenciaTipusAmortitzacio());
+                                                                            return validacioAlbara;
+                                                                        }
+                                                                    } else {
+                                                                        System.err.println("Error: La referència del tipus d'amortització de la inversió és una dada obligatòria!!");
+                                                                        validacioAlbara.setCorrect(false);
+                                                                        validacioAlbara.setMsg("Error: La referència del tipus d'amortització de la inversió és una dada obligatòria!!");
+                                                                        return validacioAlbara;
+                                                                    }
+                                                                } else {
+                                                                    System.err.println("Error: La referència de la inversió és una dada obligatòria!!");
+                                                                    validacioAlbara.setCorrect(false);
+                                                                    validacioAlbara.setMsg("Error: La referencia de la inversión es un dato obligatorio!!");
+                                                                    return validacioAlbara;
+                                                                }
+                                                            } else {
+                                                                validacioAlbara = insertAlbara(albara, "51", uSession);
+                                                                return validacioAlbara;
+                                                            }
+                                                        } else {
+                                                            System.err.println("Error: Secció " + albara.getCompteSeccioIntern().substring(4, 8) + " donada de Baixa");
+                                                            validacioAlbara.setCorrect(false);
+                                                            validacioAlbara.setMsg("Error: Secció " + albara.getCompteSeccioIntern().substring(4, 8) + " donada de Baixa");
+                                                            return validacioAlbara;
+                                                        }
+                                                    } else {
+                                                        System.err.println("Error: No Hi ha la Secció " + albara.getCompteSeccioIntern().substring(4, 8));
+                                                        validacioAlbara.setCorrect(false);
+                                                        validacioAlbara.setMsg("Error: No Hi ha la Secció " + albara.getCompteSeccioIntern().substring(4, 8));
+                                                        return validacioAlbara;
+                                                    }
+                                                } else {
+                                                    System.err.println("Error: La compteSeccioIntern " + albara.getCompteSeccioIntern().substring(0, 4) + " no existeix a l'empresa indicada!");
+                                                    validacioAlbara.setCorrect(false);
+                                                    validacioAlbara.setMsg("Error: La compteSeccioIntern " + albara.getCompteSeccioIntern().substring(0, 4) + " no existeix a l'empresa indicada!");
+                                                    return validacioAlbara;
+                                                }
+                                            } else {
+                                                System.err.println("Error: La compteSeccioIntern " + albara.getCompteSeccioIntern().substring(0, 4) + " no està permesa, ha de començar per 2, 6, 7!");
+                                                validacioAlbara.setCorrect(false);
+                                                validacioAlbara.setMsg("Error: La compteSeccioIntern " + albara.getCompteSeccioIntern().substring(0, 4) + " no està permesa, ha de començar per 2, 6, 7!");
+                                                return validacioAlbara;
+                                            }
+                                        } else {
+                                            validacioAlbara.setCorrect(false);
+                                            validacioAlbara.setMsg("Error: El Compte Seccio Carrec " + albara.getCompteSeccioIntern() + " ha de tenir un mínim de 8 caràcters");
+                                            System.err.println("Error: El Compte Seccio Carrec " + albara.getCompteSeccioIntern() + " ha de tenir un mínim de 8 caràcters");
+                                            return validacioAlbara;
+                                        }
+                                    } else {
+                                        //NO ES UNA EMPRESA DEL GRUPO   
+                                        ArraySubrutina dadesSocic = albaraDAO.srSOCIC(albara.getCompteCarrec(), uSession);
+                                        UniDynArray dynArray = new UniDynArray(dadesSocic.getDades());
+                                        String nifClient = dynArray.extract(9).toString();
+                                        //COMPROBAR QUE AL SOCIO SE LE PERMITE CARGAR ALBARÁN 51
+                                        Boolean permetAlbara51 = albaraDAO.comprobarPermetAlbara51(nifClient, uSession);
+                                        if (permetAlbara51) {
+                                            // COMPROBAR VENCIMIENTO
+                                            ErrorValidacio vencimientoAlbara = comprobarVencimentAlbara(albara.getVenciment(), nifClient, uSession);
+                                            if (!vencimientoAlbara.isCorrect()) {
+                                                validacioAlbara.setCorrect(false);
+                                                validacioAlbara.setMsg(vencimientoAlbara.getMsg());
+                                                return validacioAlbara;
+                                            } else {
+                                                //OBTENER DATOS DE srSOSIC
+                                                ErrorValidacio comprobarCliente = comprobarClient(albara.getCompteCarrec(), uSession);
+                                                if (comprobarCliente.isCorrect()) {
+                                                    //OBTENER MONTO RIESGO
+                                                    ArraySubrutina srPendent = albaraDAO.srPENDENT(albara.getCompteCarrec(), uSession);
+                                                    UniDynArray dynArraySrPendent = new UniDynArray(srPendent.getDades());
+                                                    if (importTotal > Float.valueOf(dynArraySrPendent.extract(5).toString())) {
+                                                        System.err.println("Error: L'import total de l'albarà " + importTotal + " és superior a la suma de risc del client " + dynArraySrPendent.extract(5).toString());
+                                                        validacioAlbara.setCorrect(false);
+                                                        validacioAlbara.setMsg("Error: L'import total de l'albarà " + importTotal + " és superior a la suma de risc del client " + dynArraySrPendent.extract(5).toString());
+                                                        return validacioAlbara;
+                                                    }
+                                                    if ((albara.getImportUnitari() * albara.getQuantitat()) < 0) {
+                                                        // ES UN ABONAMENT
+                                                        if (!"".equals(albara.getReferenciaFacturaCarrec()) && !"".equals(albara.getDataFacturaCarrec()) && !"".equals(albara.getImportTotalCarrec())) {
+                                                            if ("Abonament".equals(albara.getReferenciaFacturaCarrec()) || "Rappel".equals(albara.getReferenciaFacturaCarrec())) {
+                                                                albara.setDataFacturaCarrec(albaraDAO.getFiSemanaComptable(uSession));
+                                                                albara.setDataFacturaCarrec("0.01");
+                                                            } else {
+                                                                ErrorValidacio ccvadm = combrobarCarrecVendesADM(albara.getReferenciaFacturaCarrec(), albara.getDataFacturaCarrec(), uSession);
+                                                                if (ccvadm.isCorrect()) {
+                                                                    UniDynArray dynArrayVendesADM = new UniDynArray(ccvadm.getValue());
+                                                                    if (albara.getImportTotalCarrec() == (Float.valueOf(dynArrayVendesADM.extract(8).toString()) / 100)) {
+                                                                        validacioAlbara = insertAlbara(albara, "51", uSession);
+                                                                        return validacioAlbara;
+                                                                    } else {
+                                                                        System.out.println("Error: L'import total del càrrec " + albara.getImportTotalCarrec() + " no és igual a la suma de la factura " + (Float.valueOf(dynArrayVendesADM.extract(8).toString()) / 100));
+                                                                        validacioAlbara.setCorrect(false);
+                                                                        validacioAlbara.setMsg("Error: L'import total del càrrec " + albara.getImportTotalCarrec() + " no és igual a la suma de la factura " + (Float.valueOf(dynArrayVendesADM.extract(8).toString()) / 100));
+                                                                        return validacioAlbara;
+                                                                    }
+                                                                } else {
+                                                                    System.err.println(ccvadm.getMsg());
+                                                                    validacioAlbara.setCorrect(false);
+                                                                    validacioAlbara.setMsg(ccvadm.getMsg());
+                                                                    return validacioAlbara;
+                                                                }
+                                                            }
+                                                        } else {
+                                                            System.err.println("Error: L'Albarà és un Abonament. Els camps de referènciaFacturaCarrec, dataFacturaCarrec, importTotalCarrec són obligatoris!.");
+                                                            validacioAlbara.setCorrect(false);
+                                                            validacioAlbara.setMsg("Error:  El Albarán es un Abono. Los campos referenciaFacturaCarrec, dataFacturaCarrec, importTotalCarrec son obligatorios!.");
+                                                            return validacioAlbara;
+                                                        }
+                                                    } else {
+                                                        validacioAlbara = insertAlbara(albara, "51", uSession);
+                                                        return validacioAlbara;
+                                                    }
+                                                } else {
+                                                    System.err.println(vencimientoAlbara.getMsg());
+                                                    validacioAlbara.setCorrect(false);
+                                                    validacioAlbara.setMsg(vencimientoAlbara.getMsg());
+                                                    return validacioAlbara;
+                                                }
+                                            }
+                                        } else {
+                                            System.err.println("Error: A aquest client " + nifClient + " no es permet carregar albarà 51!");
+                                            validacioAlbara.setCorrect(false);
+                                            validacioAlbara.setMsg("Error: A aquest client " + nifClient + " no es permet carregar albarà 51!");
+                                            return validacioAlbara;
+                                        }
+                                    }
+                                } else {
+                                    System.err.println(validacioCliente.getMsg());
+                                    validacioAlbara.setCorrect(false);
+                                    validacioAlbara.setMsg(validacioCliente.getMsg());
+                                    return validacioAlbara;
+                                }
+                            case ERROR:
+                                System.err.println("Error: El Compte Carrec " + albara.getCompteCarrec() + " es invalid");
+                                validacioAlbara.setCorrect(false);
+                                validacioAlbara.setMsg("Error: El Compte Carrec " + albara.getCompteCarrec() + " es invalid");
+                                ;
+                                return validacioAlbara;
+                        }
+                    } else {
+                        System.err.println("Error: A aquest Seccio informat al camp Seccio d'Abonament " + albara.getSeccioAbonament() + " donada de Baixa!");
+                        validacioAlbara.setCorrect(false);
+                        validacioAlbara.setMsg("Error: A aquest Seccio informat al camp Seccio d'Abonament" + albara.getSeccioAbonament() + " donada de Baixa!");
+                        return validacioAlbara;
+                    }
+                } else {
+                    System.err.println("Error: A aquest Seccio informat al camp Seccio d'Abonament no existeix!");
+                    validacioAlbara.setCorrect(false);
+                    validacioAlbara.setMsg("Error: A aquest Seccio informat al camp Seccio d'Abonament no existeix!");
+                    return validacioAlbara;
+                }
+            } else {
+                System.err.println("Error: Departament informat al camp Departament Seccio d'Abonament " + albara.getDepatamentSeccioAbonament() + " no existeix!");
+                validacioAlbara.setCorrect(false);
+                validacioAlbara.setMsg("Error: Departament informat al camp Departament Seccio d'Abonament " + albara.getDepatamentSeccioAbonament() + " no existeix!");
+                return validacioAlbara;
+            }
+        } else {
+            System.err.println("Error: A aquest Departament informat al camp Departament Seccio d'Abonament " + albara.getDepatamentSeccioAbonament() + " no es permet carregar albarà 51!");
+            validacioAlbara.setCorrect(false);
+            validacioAlbara.setMsg("Error: A aquest Departament informat al camp Departament Seccio d'Abonament " + albara.getDepatamentSeccioAbonament() + " no es permet carregar albarà 51!");
+            return validacioAlbara;
+        }
+        return null;
+    }
